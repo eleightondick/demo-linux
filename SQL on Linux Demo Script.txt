@@ -1,0 +1,121 @@
+# Assumptions
+# -- VM exists with the correct version of Ubuntu Linux installed
+# -- Docker has been installed on the Linux VM
+# -- The commands have been run to allow use of Docker commands without sudo
+# -- A directory has been mapped from the Windows host to the Linux VM for transporting a SQL backup
+
+### Linux ###
+
+# Add the repository to the Linux server
+curl https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
+sudo add-apt-repository "$(curl https://packages.microsoft.com/config/ubuntu/16.04/mssql-server.list)"
+sudo apt-get update
+
+# Install SQL Server from the repository
+sudo apt-get install -y mssql-server
+
+# Configure SQL Server (interactive method)
+sudo /opt/mssql/bin/mssql-conf setup
+
+# Check the status of SQL Server
+systemctl status mssql-server
+
+# Install the SQL Server tools from the repository
+sudo add-apt-repository "$(curl https://packages.microsoft.com/config/ubuntu/16.04/prod.list)"
+sudo apt-get update
+
+sudo apt-get install -y mssql-tools unixodbc-dev
+
+# Add the tools to the system path
+echo 'export PATH="$PATH:/opt/mssql-tools/bin"' >> ~/.bash_profile
+echo 'export PATH="$PATH:/opt/mssql-tools/bin"' >> ~/.bashrc
+source ~/.bashrc
+
+# Start sqlcmd
+sqlcmd -S localhost -U sa
+SELECT @@VERSION, @@SERVERNAME;
+GO
+
+EXIT
+
+### Restore a database - Linux ###
+
+# Remember that permissions are much more strict in Linux
+# The service account must have permissions to the backup file
+sudo mkdir /tmp/SqlLinuxDemos
+sudo mkdir /var/opt/mssql/backup
+sudo cp /mnt/hgfs/SqlLinuxDemos/AdventureWorks2014.bak /tmp/SqlLinuxDemos
+sudo cp /tmp/SqlLinuxDemos/AdventureWorks2014.bak /var/opt/mssql/backup
+
+sqlcmd -S localhost -U sa
+
+RESTORE DATABASE [AdventureWorks2014]
+	FROM DISK = '/var/opt/mssql/backup/AdventureWorks2014.bak'
+	WITH MOVE 'AdventureWorks2014_Data' TO '/var/opt/mssql/data/AdventureWorks2014.mdf',
+		 MOVE 'AdventureWorks2014_Log' TO '/var/opt/mssql/data/AdventureWorks2014.ldf';
+GO
+
+EXIT
+
+# Now connect from SSMS on Windows
+# My IP: 192.168.184.129
+ifconfig
+
+
+### Docker ###
+
+# Retrieve the image
+docker pull microsoft/mssql-server-linux
+
+# Start a SQL Server container
+docker run -e 'ACCEPT_EULA=Y' -e 'MSSQL_SA_PASSWORD=myPassw0rd!' -e 'MSSQL_PID=Developer' -p 1401:1433 --name sqlcontainer1 -d microsoft/mssql-server-linux
+
+# Start sqlcmd from inside the container
+docker container ls -a
+
+docker exec -it sqlcontainer1 /bin/bash
+
+/opt/mssql-tools/bin/sqlcmd -S localhost -U sa
+SELECT @@VERSION, @@SERVERNAME;
+GO
+
+EXIT
+exit
+
+# Start sqlcmd from outside the container
+sqlcmd -S localhost,1401 -U sa
+SELECT @@VERSION, @@SERVERNAME;
+GO
+
+EXIT
+
+# Now connect from SSMS on Windows
+# My IP: 192.168.184.129,1401
+
+
+# Map a host directory as a data volume
+docker run -e 'ACCEPT_EULA=Y' -e 'MSSQL_SA_PASSWORD=myPassw0rd!' -p 1402:1433 -v /tmp/SqlLinuxDemos:/var/opt/mssql/backup -d microsoft/mssql-server-linux
+
+# Create a data volume container
+docker run -e 'ACCEPT_EULA=Y' -e 'MSSQL_SA_PASSWORD=myPassw0rd!' -p 1403:1433 -v sqlvolume:/var/opt/mssql/backup -d microsoft/mssql-server-linux
+
+# List all data volumes
+docker volume ls
+
+
+### Restore a database - Docker ###
+
+sqlcmd -S localhost,1402 -U sa
+
+RESTORE DATABASE [AdventureWorks2014]
+	FROM DISK = '/var/opt/mssql/backup/AdventureWorks2014.bak'
+	WITH MOVE 'AdventureWorks2014_Data' TO '/var/opt/mssql/data/AdventureWorks2014.mdf',
+		 MOVE 'AdventureWorks2014_Log' TO '/var/opt/mssql/data/AdventureWorks2014.ldf';
+GO
+
+EXIT
+
+
+### FUTURE EXPLORATIONS ###
+# Data persistence
+# Create an image using pre-configured databases
